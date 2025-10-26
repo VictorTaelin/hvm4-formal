@@ -30,10 +30,9 @@ data Term
   | Abs Name Term
   | Dry Term Term
   | App Term Term
-  -- deriving Show
 
 instance Show Term where
-  show (Nam k)       = "^" ++ k
+  show (Nam k)       = k
   show (Dry f x)     = "(" ++ show f ++ " " ++ show x ++ ")"
   show (Var k)       = k
   show (Dp0 k)       = k ++ "₀"
@@ -60,8 +59,8 @@ data Env = Env
 names :: String -> [String]
 names abc = fix $ \x -> [""] ++ concatMap (\s -> Prelude.map (:s) abc) x
 
-new_env :: Env
-new_env = Env 0 0 M.empty M.empty M.empty M.empty
+env :: Env
+env = Env 0 0 M.empty M.empty M.empty M.empty
 
 fresh_var :: Env -> (Env, String)
 fresh_var s = (s { var_new = var_new s + 1 }, "$" ++ (names ['a'..'z']) !! (var_new s + 1))
@@ -81,11 +80,94 @@ subst_dp1 s k v = s { dp1_map = M.insert k v (dp1_map s) }
 delay_dup :: Env -> String -> (Lab,Term) -> Env
 delay_dup s k v = s { dup_map = M.insert k v (dup_map s) }
 
+-- Parsing
+-- =======
+
+lexeme :: ReadP a -> ReadP a
+lexeme p = skipSpaces *> p
+
+name :: ReadP String
+name = lexeme parse_nam
+
+parse_term :: ReadP Term
+parse_term = lexeme $ choice
+  [ parse_lam
+  , parse_dup
+  , parse_app
+  , parse_sup
+  , parse_era
+  , parse_var
+  ]
+
+parse_app :: ReadP Term
+parse_app = do
+  lexeme (char '(')
+  ts <- many1 parse_term
+  lexeme (char ')')
+  case ts of
+    (t:rest) -> return (Prelude.foldl App t rest)
+    _        -> pfail
+
+parse_lam :: ReadP Term
+parse_lam = do
+  lexeme (choice [char 'λ', char '\\'])
+  k <- name
+  lexeme (char '.')
+  body <- parse_term
+  return $ Lam k body
+
+parse_dup :: ReadP Term
+parse_dup = do
+  lexeme (char '!')
+  k <- name
+  lexeme (char '&')
+  l <- name
+  lexeme (char '=')
+  v <- parse_term
+  lexeme (char ';')
+  t <- parse_term
+  return $ Dup k l v t
+
+parse_sup :: ReadP Term
+parse_sup = do
+  lexeme (char '&')
+  l <- name
+  lexeme (char '{')
+  a <- parse_term
+  lexeme (char ',')
+  b <- parse_term
+  lexeme (char '}')
+  return $ Sup l a b
+
+parse_era :: ReadP Term
+parse_era = lexeme (string "&{}") >> return Era
+
+parse_var :: ReadP Term
+parse_var = do
+  k <- name
+  choice
+    [ string "₀"  >> return (Dp0 k)
+    , string "₁"  >> return (Dp1 k)
+    , return (Var k)
+    ]
+
+parse_nam :: ReadP String
+parse_nam = munch1 $ \c
+  -> c >= 'a' && c <= 'z'
+  || c >= 'A' && c <= 'Z'
+  || c >= '0' && c <= '9'
+  || c == '_' || c == '/'
+
+read_term :: String -> Term
+read_term s = case readP_to_S (parse_term <* skipSpaces <* eof) s of
+  [(t, "")] -> t
+  _         -> error "bad-parse"
+
 -- Evaluation
 -- ==========
 
 wnf :: Env -> Term -> (Env,Term)
-wnf s (App f x)     = let (s',f') = wnf s f in app s' f' x
+wnf s (App f x)     = let (s0,f0) = wnf s f in app s0 f0 x
 wnf s (Dup k l v t) = wnf (delay_dup s k (l,v)) t
 wnf s (Var x)       = var s x
 wnf s (Dp0 x)       = dp0 s x
@@ -127,7 +209,7 @@ app_sup s fL fa fb v =
   let app1   = App fb (Dp1 x) in
   let sup    = Sup fL app0 app1 in
   let dup    = Dup x fL v sup in
-  (s0 , dup)
+  wnf s0 dup
 
 -- (fk v)
 -- ------ app-nam
@@ -206,39 +288,56 @@ dup_dry s k l vf vx t =
   let dup     = Dup f l vf (Dup x l vx t) in
   wnf s4 dup
 
+-- Helper function to lookup and delete in one operation
+map_take :: String -> Map Term -> (Maybe Term, Map Term)
+map_take k m = M.updateLookupWithKey (\_ _ -> Nothing) k m
+
+-- Helper functions to take from each map
+take_var :: Env -> String -> (Maybe Term, Env)
+take_var s k = let (mt, m) = map_take k (var_map s) in (mt, s { var_map = m })
+
+take_dp0 :: Env -> String -> (Maybe Term, Env)
+take_dp0 s k = let (mt, m) = map_take k (dp0_map s) in (mt, s { dp0_map = m })
+
+take_dp1 :: Env -> String -> (Maybe Term, Env)
+take_dp1 s k = let (mt, m) = map_take k (dp1_map s) in (mt, s { dp1_map = m })
+
+take_dup :: Env -> String -> (Maybe (Lab,Term), Env)
+take_dup s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dup_map s) in (mt, s { dup_map = m })
+
 -- x
 -- ------------ var
 -- var_map[x]
 var :: Env -> String -> (Env,Term)
-var s k = case M.lookup k (var_map s) of
-  Just t  -> wnf (s { var_map = M.delete k (var_map s) }) t
-  Nothing -> (s, Var k)
+var s k = case take_var s k of
+  (Just t, s0)  -> wnf s0 t
+  (Nothing, _)  -> (s, Var k)
 
 -- x₀
 -- ---------- dp0
 -- dp0_map[x]
 dp0 :: Env -> String -> (Env,Term)
-dp0 s k = case M.lookup k (dp0_map s) of
-  Just t  -> wnf (s { dp0_map = M.delete k (dp0_map s) }) t
-  Nothing -> case M.lookup k (dup_map s) of
-    Just (l,v) -> let (s',v') = wnf (s { dup_map = M.delete k (dup_map s) }) v in dup s' k l v' (Dp0 k)
-    Nothing    -> (s , Dp0 k)
+dp0 s k = case take_dp0 s k of
+  (Just t, s0)  -> wnf s0 t
+  (Nothing, _)  -> case take_dup s k of
+    (Just (l,v), s0) -> let (s1,v0) = wnf s0 v in dup s1 k l v0 (Dp0 k)
+    (Nothing, _)     -> (s, Dp0 k)
 
 -- x₁
 -- ---------- dp1
 -- dp1_map[x]
 dp1 :: Env -> String -> (Env,Term)
-dp1 s k = case M.lookup k (dp1_map s) of
-  Just t  -> wnf (s { dp1_map = M.delete k (dp1_map s) }) t
-  Nothing -> case M.lookup k (dup_map s) of
-    Just (l,v) -> let (s',v') = wnf (s { dup_map = M.delete k (dup_map s) }) v in dup s' k l v' (Dp1 k)
-    Nothing    -> (s , Dp1 k)
+dp1 s k = case take_dp1 s k of
+  (Just t, s0)  -> wnf s0 t
+  (Nothing, _)  -> case take_dup s k of
+    (Just (l,v), s0) -> let (s1,v0) = wnf s0 v in dup s1 k l v0 (Dp1 k)
+    (Nothing, _)     -> (s, Dp1 k)
 
 -- Normalization
 -- =============
 
 nf :: Env -> Term -> (Env,Term)
-nf s x = let (s0,x0) = wnf s x in trace ("nf: " ++ show x ++ " | " ++ show s ++ "\n→→→ " ++ show x0 ++ " | " ++ show s0) $ go s0 x0 where
+nf s x = let (s0,x0) = wnf s x in go s0 x0 where
   go s (Nam k)       = (s, Nam k)
   go s (Dry f x)     = let (s0,f0) = nf s f in let (s1,x0) = nf s0 x in (s1, Dry f0 x0)
   go s (Var k)       = (s, Var k)
@@ -251,135 +350,10 @@ nf s x = let (s0,x0) = wnf s x in trace ("nf: " ++ show x ++ " | " ++ show s ++ 
   go s (Abs k f)     = let (s0,f0) = nf s f in (s0, Abs k f0)
   go s (App f x)     = let (s0,f0) = nf s f in let (s1,x0) = nf s0 x in (s1, App f0 x0)
 
--- Parsing
--- =======
-
-lexeme :: ReadP a -> ReadP a
-lexeme p = skipSpaces *> p
-
-name :: ReadP String
-name = lexeme parse_nam
-
-parse_term :: ReadP Term
-parse_term = lexeme $ choice
-  [ parse_lam
-  , parse_dup
-  , parse_app
-  , parse_sup
-  , parse_era
-  , parse_var
-  ]
-
-parse_app :: ReadP Term
-parse_app = do
-  lexeme (char '(')
-  ts <- many1 parse_term
-  lexeme (char ')')
-  case ts of
-    (t:rest) -> return (Prelude.foldl App t rest)
-    _        -> pfail
-
-parse_lam :: ReadP Term
-parse_lam = do
-  lexeme (choice [char 'λ', char '\\'])
-  k <- name
-  lexeme (char '.')
-  body <- parse_term
-  return $ Lam k body
-
-parse_dup :: ReadP Term
-parse_dup = do
-  lexeme (char '!')
-  k <- name
-  lexeme (char '&')
-  l <- name
-  lexeme (char '=')
-  v <- parse_term
-  lexeme (char ';')
-  t <- parse_term
-  return $ Dup k l v t
-
-parse_sup :: ReadP Term
-parse_sup = do
-  lexeme (char '&')
-  l <- name
-  lexeme (char '{')
-  a <- parse_term
-  lexeme (char ',')
-  b <- parse_term
-  lexeme (char '}')
-  return $ Sup l a b
-
-parse_era :: ReadP Term
-parse_era = lexeme (string "&{}") >> return Era
-
-parse_var :: ReadP Term
-parse_var = do
-  k <- name
-  choice
-    [ string "₀"  >> return (Dp0 k)
-    , string "₁"  >> return (Dp1 k)
-    , return (Var k)
-    ]
-
--- Names should not swallow Unicode subscripts so constructs like F₀ are parsed as Dp0/Dp1.
-isNameChar :: Char -> Bool
-isNameChar c = isAlphaNum c && not (isSubscriptDigit c)
-
-isSubscriptDigit :: Char -> Bool
-isSubscriptDigit c = c >= '₀' && c <= '₉'
-
-parse_nam :: ReadP String
-parse_nam = munch1 isNameChar
-
-read_term :: String -> Term
-read_term s = case readP_to_S (parse_term <* skipSpaces <* eof) s of
-  [(t, "")] -> t
-  _         -> error "bad-parse"
-
 -- Main
 -- ====
 
 main :: IO ()
 main = do
-  let not     = read_term "! F &L = λNx. λNt. λNf. ((Nx Nf) Nt); &L{F₀,F₁}"
-  let (s0,f0) = nf new_env not
-  -- let (s1,f1) = nf s0 f0
-  print $ s0
-  print $ f0
-  -- print $ s1
-  -- print $ f1
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  let main = read_term "! F &L = λNx. λNt. λNf. ((Nx Nf) Nt); &L{F₀,F₁}"
+  print $ snd $ nf env main
