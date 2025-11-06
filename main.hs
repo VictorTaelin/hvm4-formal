@@ -80,6 +80,18 @@ subst_dp1 s k v = s { dp1_map = M.insert k v (dp1_map s) }
 delay_dup :: Env -> String -> (Lab,Term) -> Env
 delay_dup s k v = s { dup_map = M.insert k v (dup_map s) }
 
+take_var :: Env -> String -> (Maybe Term, Env)
+take_var s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (var_map s) in (mt, s { var_map = m })
+
+take_dp0 :: Env -> String -> (Maybe Term, Env)
+take_dp0 s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dp0_map s) in (mt, s { dp0_map = m })
+
+take_dp1 :: Env -> String -> (Maybe Term, Env)
+take_dp1 s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dp1_map s) in (mt, s { dp1_map = m })
+
+take_dup :: Env -> String -> (Maybe (Lab,Term), Env)
+take_dup s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dup_map s) in (mt, s { dup_map = m })
+
 -- Parsing
 -- =======
 
@@ -287,18 +299,6 @@ dup_dry s k l vf vx t =
   let s4      = subst_dp1 s3 k (Dry (Dp1 f) (Dp1 x)) in
   let dup     = Dup f l vf (Dup x l vx t) in
   wnf s4 dup
-
-take_var :: Env -> String -> (Maybe Term, Env)
-take_var s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (var_map s) in (mt, s { var_map = m })
-
-take_dp0 :: Env -> String -> (Maybe Term, Env)
-take_dp0 s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dp0_map s) in (mt, s { dp0_map = m })
-
-take_dp1 :: Env -> String -> (Maybe Term, Env)
-take_dp1 s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dp1_map s) in (mt, s { dp1_map = m })
-
-take_dup :: Env -> String -> (Maybe (Lab,Term), Env)
-take_dup s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dup_map s) in (mt, s { dup_map = m })
 
 -- x
 -- ------------ var
