@@ -288,19 +288,14 @@ dup_dry s k l vf vx t =
   let dup     = Dup f l vf (Dup x l vx t) in
   wnf s4 dup
 
--- Helper function to lookup and delete in one operation
-map_take :: String -> Map Term -> (Maybe Term, Map Term)
-map_take k m = M.updateLookupWithKey (\_ _ -> Nothing) k m
-
--- Helper functions to take from each map
 take_var :: Env -> String -> (Maybe Term, Env)
-take_var s k = let (mt, m) = map_take k (var_map s) in (mt, s { var_map = m })
+take_var s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (var_map s) in (mt, s { var_map = m })
 
 take_dp0 :: Env -> String -> (Maybe Term, Env)
-take_dp0 s k = let (mt, m) = map_take k (dp0_map s) in (mt, s { dp0_map = m })
+take_dp0 s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dp0_map s) in (mt, s { dp0_map = m })
 
 take_dp1 :: Env -> String -> (Maybe Term, Env)
-take_dp1 s k = let (mt, m) = map_take k (dp1_map s) in (mt, s { dp1_map = m })
+take_dp1 s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dp1_map s) in (mt, s { dp1_map = m })
 
 take_dup :: Env -> String -> (Maybe (Lab,Term), Env)
 take_dup s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dup_map s) in (mt, s { dup_map = m })
