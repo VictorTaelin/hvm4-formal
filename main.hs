@@ -62,35 +62,27 @@ names abc = fix $ \x -> [""] ++ concatMap (\s -> Prelude.map (:s) abc) x
 env :: Env
 env = Env 0 0 M.empty M.empty M.empty M.empty
 
-fresh_var :: Env -> (Env, String)
-fresh_var s = (s { var_new = var_new s + 1 }, "$" ++ (names ['a'..'z']) !! (var_new s + 1))
+fresh :: (Env -> Int) -> (Env -> Int -> Env) -> String -> Env -> (Env, String)
+fresh get set chars s = (set s (get s + 1), "$" ++ (names chars) !! (get s + 1))
 
-fresh_dup :: Env -> (Env, String)
-fresh_dup s = (s { dup_new = dup_new s + 1 }, "$" ++ (names ['A'..'Z']) !! (dup_new s + 1))
+fresh_var = fresh var_new (\s n -> s { var_new = n }) ['a'..'z']
+fresh_dup = fresh dup_new (\s n -> s { dup_new = n }) ['A'..'Z']
 
-subst_var :: Env -> String -> Term -> Env
-subst_var s k v = s { var_map = M.insert k v (var_map s) }
+subst :: (Env -> Map a) -> (Env -> Map a -> Env) -> Env -> String -> a -> Env
+subst get set s k v = set s (M.insert k v (get s))
 
-subst_dp0 :: Env -> String -> Term -> Env
-subst_dp0 s k v = s { dp0_map = M.insert k v (dp0_map s) }
+subst_var = subst var_map (\s m -> s { var_map = m })
+subst_dp0 = subst dp0_map (\s m -> s { dp0_map = m })
+subst_dp1 = subst dp1_map (\s m -> s { dp1_map = m })
+delay_dup = subst dup_map (\s m -> s { dup_map = m })
 
-subst_dp1 :: Env -> String -> Term -> Env
-subst_dp1 s k v = s { dp1_map = M.insert k v (dp1_map s) }
+taker :: (Env -> Map a) -> (Env -> Map a -> Env) -> Env -> String -> (Maybe a, Env)
+taker get set s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (get s) in (mt, set s m)
 
-delay_dup :: Env -> String -> (Lab,Term) -> Env
-delay_dup s k v = s { dup_map = M.insert k v (dup_map s) }
-
-take_var :: Env -> String -> (Maybe Term, Env)
-take_var s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (var_map s) in (mt, s { var_map = m })
-
-take_dp0 :: Env -> String -> (Maybe Term, Env)
-take_dp0 s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dp0_map s) in (mt, s { dp0_map = m })
-
-take_dp1 :: Env -> String -> (Maybe Term, Env)
-take_dp1 s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dp1_map s) in (mt, s { dp1_map = m })
-
-take_dup :: Env -> String -> (Maybe (Lab,Term), Env)
-take_dup s k = let (mt, m) = M.updateLookupWithKey (\_ _ -> Nothing) k (dup_map s) in (mt, s { dup_map = m })
+take_var = taker var_map (\s m -> s { var_map = m })
+take_dp0 = taker dp0_map (\s m -> s { dp0_map = m })
+take_dp1 = taker dp1_map (\s m -> s { dp1_map = m })
+take_dup = taker dup_map (\s m -> s { dup_map = m })
 
 -- Parsing
 -- =======
@@ -350,5 +342,6 @@ nf s x = let (s0,x0) = wnf s x in go s0 x0 where
 
 main :: IO ()
 main = do
-  let main = read_term "! F &L = λNx. λNt. λNf. ((Nx Nf) Nt); &L{F₀,F₁}"
+  -- let main = read_term "! F &L = λNx. λNt. λNf. ((Nx Nf) Nt); &L{F₀,F₁}"
+  let main = read_term "(λf. !F00&A=f; !F01&A=λx00.(F00₀ (F00₁ x00)); !F02&A=λx01.(F01₀ (F01₁ x01)); λx02. (F02₀ (F02₁ x02)) λB.λT.λF.((B F) T))"
   print $ snd $ nf env main
